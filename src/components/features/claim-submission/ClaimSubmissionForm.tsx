@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef } from "react";
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { useConnect } from "wagmi";
 import { useTrust } from "@/components/hooks/useTrust";
 import TrustScoreTooltip from "@/components/ui/TrustScoreTooltip";
@@ -8,6 +9,9 @@ import { useSubmitClaim } from "@/app/queries/claims.queries";
 import { useWriteContract, useReadContract, usePublicClient, useChainId } from "wagmi";
 import { keccak256, stringToHex, parseAbi } from "viem";
 import { useWriteReadiness } from "@/hooks/useWriteReadiness";
+import { EvidenceUploader } from "@/features/evidence-upload/EvidenceUploader";
+import { buildContentDigest, buildEvidenceSubmission } from "@/features/evidence-upload/evidence-commitment";
+import type { EvidenceCommitment } from "@/features/evidence-upload/types";
 
 const claimAbi = parseAbi([
   "function createClaim(bytes32 contentDigest, address bountyAsset, uint256 amount, bytes32 configHash) returns (uint256 claimId)",
@@ -152,6 +156,7 @@ const ClaimSubmissionForm: React.FC<ClaimFormProps> = ({ onSubmit, onClose }) =>
   const [errors, setErrors] = useState<FormErrors>({});
   const [touched, setTouched] = useState<{ [key: string]: boolean }>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [evidenceCommitment, setEvidenceCommitment] = useState<EvidenceCommitment | null>(null);
 
   const trust = useTrust();
   const account = useAccount();
@@ -171,53 +176,16 @@ const ClaimSubmissionForm: React.FC<ClaimFormProps> = ({ onSubmit, onClose }) =>
   const isPending = isSubmittingApi || isSubmittingTx;
 
 
-  const lowReputation = trust.reputation < 20;
-  const newWallet = trust.accountAgeDays < 7;
+  const lowReputation = trust.reputation !== null && trust.reputation < 20;
+  const newWallet = trust.accountAgeDays !== null && trust.accountAgeDays < 7;
   const lowTrust =
-    !trust.isVerified || lowReputation || newWallet || trust.suspicious;
+    !trust.isVerified || lowReputation || newWallet || trust.suspicious === true;
 
   const modalRef = useRef<HTMLDivElement>(null);
-  const previousActiveElement = useRef<HTMLElement | null>(null);
   const firstInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    previousActiveElement.current = document.activeElement as HTMLElement;
-    firstInputRef.current?.focus();
-    return () => {
-      previousActiveElement.current?.focus();
-    };
-  }, []);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
-    }
-  }, [onClose]);
-
-  const handleFocusTrap = useCallback((e: React.KeyboardEvent) => {
-    if (e.key !== "Tab") return;
-
-    const focusableElements = modalRef.current?.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    if (!focusableElements || focusableElements.length === 0) return;
-
-    const firstElement = focusableElements[0] as HTMLElement;
-    const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
-
-    if (e.shiftKey) {
-      if (document.activeElement === firstElement) {
-        e.preventDefault();
-        lastElement.focus();
-      }
-    } else {
-      if (document.activeElement === lastElement) {
-        e.preventDefault();
-        firstElement.focus();
-      }
-    }
-  }, []);
+  useDialogFocus(true, modalRef, firstInputRef, () => {
+    if (!isPending) onClose();
+  });
 
   const validateField = (name: string, value: string): string | undefined => {
     switch (name) {
@@ -289,9 +257,10 @@ const ClaimSubmissionForm: React.FC<ClaimFormProps> = ({ onSubmit, onClose }) =>
 
     try {
       if (process.env.NEXT_PUBLIC_BOUNTY_CLAIM_ADDRESS) {
-        const contentDigest = keccak256(
-          stringToHex(`${title}|${category}|${impact}|${source}|${description}`)
-        );
+        const contentDigest = buildContentDigest({
+          title, category, impact, source, description,
+          evidenceDigest: evidenceCommitment?.digest ?? null,
+        });
         await submitClaim(contentDigest);
       }
 
@@ -302,6 +271,7 @@ const ClaimSubmissionForm: React.FC<ClaimFormProps> = ({ onSubmit, onClose }) =>
           impact,
           source,
           description,
+          evidence: buildEvidenceSubmission(evidenceCommitment),
         });
       }
 
@@ -391,12 +361,11 @@ const ClaimSubmissionForm: React.FC<ClaimFormProps> = ({ onSubmit, onClose }) =>
       aria-modal="true"
       aria-labelledby="claim-submission-title"
       data-testid="claim-submission-modal"
-      onKeyDown={handleFocusTrap}
+      tabIndex={-1}
     >
       <form
         className="modal-panel bg-[#18181b] border border-[#232329] flex flex-col gap-4"
         onSubmit={handleSubmit}
-        onKeyDown={handleKeyDown}
       >
         <h2 id="claim-submission-title" className="text-xl font-bold text-white">Submit a Claim</h2>
 

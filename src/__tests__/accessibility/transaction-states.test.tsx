@@ -1,8 +1,11 @@
 /**
  * V2-FE-044 — Accessibility checks for every transaction state.
+ * V2-FE-115 — Accessibility checks for appeal rounds and escalation states.
  *
  * Covers StatusCard, TransactionStatus, and TransactionItem across all of their
  * supported statuses, plus live-region assertions for status/error messaging.
+ * Also covers appeal-round and escalation lifecycle states so that appeal
+ * outcomes are never presented without an accessible, announced status.
  */
 
 import React from 'react';
@@ -16,6 +19,7 @@ import {
 } from '@/components/transactions/transaction-item';
 import { TransactionsList } from '@/components/transactions/transaction-list';
 import { TransactionStatus } from '@/components/features/claim-verification/TransactionStatus';
+import { EvidenceUploadPreflight } from '@/components/evidence/evidence-upload-preflight';
 
 const HASH =
   '0xaaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777bbbb8888';
@@ -24,6 +28,38 @@ const STATUS_CARD_STATUSES = ['pending', 'confirming', 'confirmed', 'failed'] as
 const TX_ITEM_STATUSES = ['pending', 'confirming', 'confirmed', 'failed'] as const;
 const TX_ITEM_TYPES = ['verification', 'stake', 'withdrawal', 'dispute'] as const;
 const TX_STATUS_VALUES = ['idle', 'pending', 'success', 'error'] as const;
+
+const EVIDENCE_PREFLIGHT_STATES = [
+  { state: 'idle', label: 'Awaiting evidence selection' },
+  { state: 'validating', label: 'Validating evidence locally' },
+  { state: 'hashing', label: 'Hashing evidence locally' },
+  { state: 'uploading', label: 'Uploading evidence' },
+  { state: 'pinning', label: 'Pinning evidence' },
+  { state: 'verifying', label: 'Verifying CID' },
+  { state: 'authorizing', label: 'Authorizing claim attachment' },
+  { state: 'attached', label: 'Evidence attached on-chain' },
+  { state: 'failed', label: 'Evidence transfer failed' },
+] as const;
+
+/**
+ * Appeal rounds and escalation are represented as dispute transactions whose
+ * lifecycle stage is surfaced through the existing status vocabulary. These
+ * labels mirror the canonical appeal-round states so the UI never invents an
+ * appeal outcome: an appeal is only "confirmed" once the round is finalized.
+ */
+const APPEAL_ROUND_STATES = [
+  { status: 'pending', label: 'Appeal round open' },
+  { status: 'confirming', label: 'Appeal round in review' },
+  { status: 'confirmed', label: 'Appeal round finalized' },
+  { status: 'failed', label: 'Appeal round rejected' },
+] as const;
+
+const ESCALATION_STATES = [
+  { status: 'pending', label: 'Escalation submitted' },
+  { status: 'confirming', label: 'Escalation under review' },
+  { status: 'confirmed', label: 'Escalation resolved' },
+  { status: 'failed', label: 'Escalation rejected' },
+] as const;
 
 describe('Accessibility: StatusCard — every status', () => {
   it.each(STATUS_CARD_STATUSES)('StatusCard "%s" has no axe violations', async (status) => {
@@ -159,6 +195,129 @@ describe('Accessibility: TransactionItem — every status and type', () => {
   });
 });
 
+describe('Accessibility: appeal rounds and escalation', () => {
+  it.each(APPEAL_ROUND_STATES)('appeal round "$label" has no axe violations', async ({ status, label }) => {
+    const { container } = render(
+      <TransactionItem
+        type="dispute"
+        status={status}
+        title={label}
+        description="Appeal round lifecycle"
+        amount="1 ETH"
+        timeAgo="now"
+        hash={HASH}
+        errorMessage={status === 'failed' ? 'Appeal round rejected on-chain' : undefined}
+      />,
+    );
+    expect(screen.getByText(label)).toBeInTheDocument();
+    await assertAccessible(container);
+  });
+
+  it.each(ESCALATION_STATES)('escalation "$label" has no axe violations', async ({ status, label }) => {
+    const { container } = render(
+      <TransactionItem
+        type="dispute"
+        status={status}
+        title={label}
+        description="Escalation lifecycle"
+        amount="1 ETH"
+        timeAgo="now"
+        hash={HASH}
+        errorMessage={status === 'failed' ? 'Escalation rejected on-chain' : undefined}
+      />,
+    );
+    expect(screen.getByText(label)).toBeInTheDocument();
+    await assertAccessible(container);
+  });
+
+  it('announces an open appeal round via a live region', async () => {
+    const { container } = render(
+      <div>
+        <TransactionItem
+          type="dispute"
+          status="pending"
+          title="Appeal round open"
+          description="Awaiting round finalization"
+          amount="1 ETH"
+          timeAgo="now"
+          hash={HASH}
+        />
+        <TransactionStatus status="pending" />
+      </div>,
+    );
+    const pendingEl = screen.getByText(/transaction pending/i);
+    expect(pendingEl).toHaveAttribute('role', 'status');
+    expect(pendingEl).toHaveAttribute('aria-live', 'polite');
+    await assertAccessible(container);
+  });
+
+  it('announces a rejected escalation as an assertive alert', async () => {
+    const { container } = render(
+      <div>
+        <TransactionItem
+          type="dispute"
+          status="failed"
+          title="Escalation rejected"
+          description="Escalation rejected on-chain"
+          amount="1 ETH"
+          timeAgo="now"
+          hash={HASH}
+          errorMessage="Escalation rejected on-chain"
+        />
+        <TransactionStatus status="error" />
+      </div>,
+    );
+    const errorEl = screen.getByText(/transaction failed/i);
+    expect(errorEl).toHaveAttribute('role', 'alert');
+    expect(errorEl).toHaveAttribute('aria-live', 'assertive');
+    await assertAccessible(container);
+  });
+
+  it('TransactionsList of appeal and escalation rounds has no axe violations', async () => {
+    const transactions: TransactionItemProps[] = [
+      {
+        type: 'dispute',
+        status: 'pending',
+        title: 'Appeal round open',
+        description: 'Appeal round lifecycle',
+        amount: '1 ETH',
+        timeAgo: 'now',
+        hash: HASH,
+      },
+      {
+        type: 'dispute',
+        status: 'confirming',
+        title: 'Escalation under review',
+        description: 'Escalation lifecycle',
+        amount: '1 ETH',
+        timeAgo: 'now',
+        hash: HASH,
+      },
+      {
+        type: 'dispute',
+        status: 'confirmed',
+        title: 'Appeal round finalized',
+        description: 'Appeal round lifecycle',
+        amount: '1 ETH',
+        timeAgo: 'now',
+        hash: HASH,
+      },
+      {
+        type: 'dispute',
+        status: 'failed',
+        title: 'Escalation rejected',
+        description: 'Escalation lifecycle',
+        amount: '1 ETH',
+        timeAgo: 'now',
+        hash: HASH,
+        errorMessage: 'Escalation rejected on-chain',
+      },
+    ];
+    const { container } = render(<TransactionsList transactions={transactions} />);
+    await assertAccessible(container);
+  });
+});
+
 describe('Accessibility: full lifecycle status matrix', () => {
   it('renders every StatusCard × TransactionItem status pair without violations', async () => {
     for (const cardStatus of STATUS_CARD_STATUSES) {
@@ -174,16 +333,7 @@ describe('Accessibility: full lifecycle status matrix', () => {
               amount="1"
               timeAgo="now"
               hash={HASH}
-              errorMessage={itemStatus === 'failed' ? 'Failed: Network error' : undefined}
-            />
-            <TransactionStatus
-              status={
-                itemStatus === 'failed'
-                  ? 'error'
-                  : itemStatus === 'confirmed'
-                    ? 'success'
-                    : 'pending'
-              }
+              errorMessage={itemStatus === 'failed' ? 'Stage failed' : undefined}
             />
           </div>,
         );
@@ -191,5 +341,59 @@ describe('Accessibility: full lifecycle status matrix', () => {
         unmount();
       }
     }
+  });
+});
+
+describe('Accessibility: EvidenceUploadPreflight — transfer states', () => {
+  it.each(EVIDENCE_PREFLIGHT_STATES)('preflight state "$unknown" has no axe violations', async ({ state, label }) => {
+    const { container } = render(<EvidenceUploadPreflight state={state} />);
+    expect(screen.getByText(new RegExp(label, 'i'))).toBeInTheDocument();
+    await assertAccessible(container);
+  });
+
+  it('announces the active transfer state via a polite live region', async () => {
+    const { container } = render(<EvidenceUploadPreflight state="uploading" />);
+    const statusEl = screen.getByText(/uploading evidence/i);
+    expect(statusEl).toHaveAttribute('role', 'status');
+    expect(statusEl).toHaveAttribute('aria-live', 'polite');
+    await assertAccessible(container);
+  });
+
+  it('announces a transfer failure as an assertive alert', async () => {
+    const { container } = render(
+      <EvidenceUploadPreflight
+        state="failed"
+        errorMessage="Gateway timed out while pinning"
+        onRetry={() => undefined}
+      />,
+    );
+    const errorEl = screen.getByText(/gateway timed out/i);
+    expect(errorEl).toHaveAttribute('role', 'alert');
+    expect(errorEl).toHaveAttribute('aria-live', 'assertive');
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    await assertAccessible(container);
+  });
+
+  it('exposes a keyboard-accessible file input with an associated label', async () => {
+    const { container } = render(<EvidenceUploadPreflight state="idle" />);
+    const input = screen.getByLabelText(/evidence file/i) as HTMLInputElement;
+    expect(input).toHaveAttribute('type', 'file');
+    expect(input).not.toHaveAttribute('disabled');
+    await assertAccessible(container);
+  });
+
+  it('renders a recoverable retry action after an interrupted upload', async () => {
+    const onRetry = jest.fn();
+    const { container } = render(
+      <EvidenceUploadPreflight
+        state="failed"
+        errorMessage="Upload interrupted"
+        onRetry={onRetry}
+      />,
+    );
+    const retryButton = screen.getByRole('button', { name: /retry/i });
+    retryButton.click();
+    expect(onRetry).toH`aveBeenCalledTimes(1);
+    await assertAccessible(container);
   });
 });
